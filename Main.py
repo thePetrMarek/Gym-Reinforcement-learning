@@ -1,133 +1,63 @@
-import random
-
 import gym
-import tensorflow as tf
-import numpy as np
+from gym import wrappers
 
-episodes = 3000
-epsilon = 0.0
-epsilon_min = 0.0
-gama = 0.9
-epsilon_decay = (epsilon - epsilon_min) / episodes
-
-# Neural network for Q approximation
-input_vec = tf.placeholder(shape=[None, 4], dtype=tf.float32)
-target_q = tf.placeholder(shape=[None, 2], dtype=tf.float32)
-
-W1 = tf.Variable(tf.random_uniform([4, 128], 0, 0.01))
-b1 = tf.Variable(tf.zeros([128]))
-layer_one = tf.nn.relu(tf.matmul(input_vec, W1) + b1)
-
-W2 = tf.Variable(tf.random_uniform([128, 128], 0, 0.01))
-b2 = tf.Variable(tf.zeros([128]))
-layer_two = tf.nn.relu(tf.matmul(layer_one, W2) + b2)
-
-W3 = tf.Variable(tf.random_uniform([128, 2], 0, 0.01))
-b3 = tf.Variable(tf.zeros([2]))
-q = tf.matmul(layer_two, W3) + b3
-
-selected_action = tf.argmax(q, 1)
-
-loss = tf.reduce_mean(tf.square(q - target_q))
-train_step = tf.train.AdamOptimizer(0.0005).minimize(loss)
-
-init = tf.global_variables_initializer()
+from DeepQAgent.deep_q_agent import DeepQAgent
+from DeepQAgent.deep_q_neural_network import DeepQNeuralNetwork
+from debug import Debug
 
 
-def evaluate_actions(state, session):
-    state = state.reshape(1, 4)
-    actions_q, best_action = session.run([q, selected_action], feed_dict={input_vec: state})
-    return actions_q, best_action
+class Main:
+    def __init__(self):
+        self.api_key = 'YOUR_API_KEY'
+        self.environment = 'CartPole-v0'
+        self.env = gym.make(self.environment)
+        self.episodes = 3000
+        self.agent_name = "DeepQAgent"
+        self.neural_network = DeepQNeuralNetwork("./DeepQAgent/" + self.environment + "/model", "")
+        self.agent = DeepQAgent(self.env.action_space, 1.0, 0.1, 0.90, 50, 50, self.episodes, self.neural_network)
+        self.load = False
+        self.train = True
+        self.render = True
+        self.monitor = True
+        self.upload = False
+        self.checkpoint_every = 100
+
+    def run(self):
+        debug = Debug()
+        if self.monitor:
+            self.env = wrappers.Monitor(self.env, './DeepQAgent/' + self.environment, video_callable=False, force=True)
+        if self.load:
+            self.agent.load()
+
+        for episode in range(self.episodes):
+            step = 0
+            total_reward = 0
+            observation = self.env.reset()
+
+            while True:
+                if self.render:
+                    self.env.render()
+                action = self.agent.select_action(observation)
+                new_observation, reward, done, info = self.env.step(action)
+                total_reward += reward
+                if self.train:
+                    self.agent.update(observation, action, reward, new_observation, done)
+                observation = new_observation
+                if done:
+                    break
+                step += 1
+            self.agent.after_episode_update()
+
+            if episode % self.checkpoint_every == 0:
+                self.agent.save_checkpoint(episode)
+            debug.add_episode_reward(total_reward)
+            debug.show_debug(episode)
+
+        self.agent.save_checkpoint(self.episodes)
+        if self.upload:
+            gym.upload('/tmp/' + self.environment, api_key=self.api_key)
 
 
-def epsilon_greedy_policy(state, session):
-    actions_q, best_action = evaluate_actions(state, session)
-    action = best_action[0]
-    if random.random() < epsilon:
-        action = random.randint(0, 1)
-    return actions_q, action
-
-
-def update():
-    samples = get_from_memory()
-    input = []
-    predictions = []
-    for sample in samples:
-        state = sample[0]
-        new_state = sample[3]
-        action = sample[1]
-        reward = sample[2]
-        done = sample[4]
-
-        state2d = state.reshape(1, 4)
-        new_state2d = new_state.reshape(1, 4)
-        actions_q, _ = evaluate_actions(state2d, session)
-        next_actions_q, _ = evaluate_actions(new_state2d, session)
-        next_state_value = np.max(next_actions_q)
-        if not done:
-            actions_q[0, action] = reward + gama * next_state_value
-        else:
-            actions_q[0, action] = reward
-        target = actions_q
-        input.append(state)
-        predictions.append(target[0])
-    session.run(train_step, feed_dict={input_vec: input, target_q: predictions})
-
-
-moving_av = []
-
-memory_size = 50
-memory = []
-
-
-def add_to_memory(sample):
-    memory.append(sample)
-    if len(memory) > memory_size:
-        memory.pop(0)
-
-
-def get_from_memory():
-    n = min(50, len(memory))
-    return random.sample(memory, n)
-
-
-def moving_average(total_reward):
-    moving_av.append(total_reward)
-    if (len(moving_av) > 100):
-        moving_av.pop(0)
-    print(sum(moving_av) / len(moving_av))
-
-
-# Start
-env = gym.make('CartPole-v0')
-saver = tf.train.Saver()
-with tf.Session() as session:
-    #session.run(init)
-    saver.restore(session, '.\model\model-2900')
-
-    for episode in range(episodes):
-        total_reward = 0
-        observation = env.reset()
-        step = 0
-        while True:
-            #if episode %100 ==0:
-            env.render()
-            actions_q, action = epsilon_greedy_policy(observation, session)
-
-            next_observation, reward, done, info = env.step(action)
-            total_reward += reward
-
-            add_to_memory((observation, action, reward, next_observation, done))
-
-            observation = next_observation
-            if done:
-                #epsilon -= epsilon_decay
-                print("Episode " + str(episode) + ": " + str(total_reward))
-                moving_average(total_reward)
-                break
-            #update()
-        #if episode % 100 == 0:
-        #    saver.save(session, '.\model\model', global_step=episode)
-    #saver.save(session, '.\model\model', global_step=episodes)
-
-
+if __name__ == "__main__":
+    main = Main()
+    main.run()
